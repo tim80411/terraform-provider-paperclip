@@ -75,6 +75,7 @@ func (p *paperclipProvider) Resources(_ context.Context) []func() resource.Resou
 	return []func() resource.Resource{
 		NewCompanyResource,
 		NewSecretResource,
+		NewAgentResource,
 	}
 }
 
