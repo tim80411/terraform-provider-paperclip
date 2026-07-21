@@ -45,7 +45,7 @@ func TestAccCompanyResource_lifecycle(t *testing.T) {
 				if err == nil {
 					return fmt.Errorf("company %s still exists after destroy", rs.Primary.ID)
 				}
-				if !client.IsNotFound(err) {
+				if !client.IsGone(err) {
 					return fmt.Errorf("unexpected error checking destroy: %w", err)
 				}
 			}

@@ -93,6 +93,33 @@ func TestGetCompany_404IsNotFound(t *testing.T) {
 	if !IsNotFound(err) {
 		t.Errorf("IsNotFound(err) = false, want true for 404 response; err = %v", err)
 	}
+	// 404 也算「gone」（見 IsGone doc）。
+	if !IsGone(err) {
+		t.Errorf("IsGone(err) = false, want true for 404 response; err = %v", err)
+	}
+}
+
+// TestGetCompany_403IsGone: live API 對「已刪除」的 company 回 403
+// ("User does not have access to this company")，不是 404 —— 已對真實 API 驗證過。
+// 對持有 board/instance-admin token 的呼叫者而言，403 與 404 都代表「這個資源不在了」。
+func TestGetCompany_403IsGone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+		_, _ = w.Write([]byte(`{"error":"User does not have access to this company"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	_, err := c.GetCompany(context.Background(), "deleted-id")
+	if err == nil {
+		t.Fatal("expected error on 403, got nil")
+	}
+	if !IsGone(err) {
+		t.Errorf("IsGone(err) = false, want true for 403 response; err = %v", err)
+	}
+	if IsNotFound(err) {
+		t.Errorf("IsNotFound(err) = true, want false for 403 response; err = %v", err)
+	}
 }
 
 func TestGetCompany_500IsNotNotFound(t *testing.T) {
@@ -109,6 +136,9 @@ func TestGetCompany_500IsNotNotFound(t *testing.T) {
 	}
 	if IsNotFound(err) {
 		t.Errorf("IsNotFound(err) = true, want false for 500 response; err = %v", err)
+	}
+	if IsGone(err) {
+		t.Errorf("IsGone(err) = true, want false for 500 response; err = %v", err)
 	}
 }
 

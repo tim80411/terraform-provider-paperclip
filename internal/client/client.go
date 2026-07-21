@@ -35,6 +35,19 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &e) && e.StatusCode == http.StatusNotFound
 }
 
+// IsGone reports whether err indicates the resource no longer exists or is
+// no longer accessible to this caller. The paperclip API returns 403
+// ("User does not have access to this company") for a DELETED company, not
+// 404 — verified against the live API — so both statuses mean "gone" for a
+// board/instance-admin token that previously had access.
+func IsGone(err error) bool {
+	var e *APIError
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.StatusCode == http.StatusNotFound || e.StatusCode == http.StatusForbidden
+}
+
 func New(baseURL, apiKey string) *Client {
 	baseURL = strings.TrimRight(baseURL, "/")
 	return &Client{BaseURL: baseURL, APIKey: apiKey, HTTP: http.DefaultClient}

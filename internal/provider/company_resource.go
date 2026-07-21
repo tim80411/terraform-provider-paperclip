@@ -78,7 +78,7 @@ func (r *companyResource) Read(ctx context.Context, req resource.ReadRequest, re
 	}
 	got, err := r.client.GetCompany(ctx, state.ID.ValueString())
 	if err != nil {
-		if client.IsNotFound(err) {
+		if client.IsGone(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -111,7 +111,7 @@ func (r *companyResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := r.client.DeleteCompany(ctx, state.ID.ValueString()); err != nil && !client.IsNotFound(err) {
+	if err := r.client.DeleteCompany(ctx, state.ID.ValueString()); err != nil && !client.IsGone(err) {
 		resp.Diagnostics.AddError("Delete company failed", err.Error())
 	}
 }
