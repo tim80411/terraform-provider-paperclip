@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -48,5 +50,49 @@ func TestDo_Noningred2xxIsError(t *testing.T) {
 	err := c.do(context.Background(), "GET", "/api/companies/x", nil, nil)
 	if err == nil {
 		t.Fatal("expected error on 403, got nil")
+	}
+}
+
+func TestUpdateCompany_OmitsUnsetFields(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"c1","name":"Renamed"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	newName := "Renamed"
+	_, err := c.UpdateCompany(context.Background(), "c1", CompanyUpdateInput{Name: &newName})
+	if err != nil {
+		t.Fatalf("UpdateCompany: %v", err)
+	}
+	if _, ok := gotBody["name"]; !ok {
+		t.Error("body missing name")
+	}
+	// 核心：description / slug 未設 → 不得出現在 body（保留未管欄位）
+	if _, ok := gotBody["description"]; ok {
+		t.Error("body must NOT contain description when unset (would clobber)")
+	}
+	if _, ok := gotBody["slug"]; ok {
+		t.Error("body must NOT contain slug when unset (would clobber)")
+	}
+}
+
+func TestCreateCompany_ParsesID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"id":"c9","name":"Acme","slug":"acme"}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "tok")
+	got, err := c.CreateCompany(context.Background(), CompanyCreateInput{Name: "Acme"})
+	if err != nil {
+		t.Fatalf("CreateCompany: %v", err)
+	}
+	if got.ID != "c9" || got.Slug != "acme" {
+		t.Errorf("got %+v", got)
 	}
 }
