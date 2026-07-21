@@ -74,6 +74,7 @@ func (p *paperclipProvider) Configure(ctx context.Context, req provider.Configur
 func (p *paperclipProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewCompanyResource,
+		NewSecretResource,
 	}
 }
 
