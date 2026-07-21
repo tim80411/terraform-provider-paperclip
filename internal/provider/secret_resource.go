@@ -55,7 +55,11 @@ func (r *secretResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Required: true,
 				Description: "secret 的識別 key。live 探測：paperclip 會把 key 正規化成小寫" +
 					`（例如 "GH_TOKEN" 存回 "gh_token"）。本 provider 在 state 保留你 config 寫的` +
-					"原始大小寫，避免每次 plan 都因為這個正規化顯示假 diff。",
+					"原始大小寫，避免每次 plan 都因為這個正規化顯示假 diff。匯入（terraform import）情境" +
+					"例外：import 沒有 prior state 可比對大小寫，一律直接採用 API 回傳的（已小寫化）值——" +
+					`匯入一個 config 用大寫 key（如 "GH_TOKEN"）宣告的既有 secret，state 會落地成小寫的` +
+					`"gh_token"，跟 config 大小寫不同；之後每次 plan 都要把 config 改成小寫，或接受這個` +
+					"已知落差。",
 			},
 			"value": schema.StringAttribute{
 				Required:  true,
@@ -133,6 +137,20 @@ func (r *secretResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
+	// 擋掉「改了 value 卻沒 bump value_version」——這個組合如果放行，Update 會把新 value
+	// 寫進 state 但完全不打 rotate，live 上的 secret 仍是舊值，且因為 state 已經跟 plan
+	// 一致，之後也不會再有任何 plan diff 讓人發現漏了 rotate。寧可當場報錯，逼使用者
+	// 一起 bump value_version 來觸發真正的 rotate。
+	if valueChangedWithoutVersionBump(plan, state) {
+		resp.Diagnostics.AddError(
+			"value changed but value_version was not bumped",
+			"`value` differs from the current state but `value_version` did not change, so this secret "+
+				"would silently keep its old value live while state moved on as if it rotated. "+
+				"Bump `value_version` (to any new value) in the same change to actually rotate the secret.",
+		)
+		return
+	}
+
 	// 只送有變的欄位（指標）→ 保留未管欄位（spec §6.3）。
 	in := buildSecretUpdateInput(plan, state)
 	var got *client.Secret
@@ -156,13 +174,11 @@ func (r *secretResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 
 	if got == nil {
-		// name/key/value_version 都沒變（例如只改了 value 但沒 bump version）——不需要打
-		// PATCH 或 rotate，但仍需要一份目前的 API 快照來組出最終 state。
-		got, err = r.client.GetSecret(ctx, plan.CompanyID.ValueString(), state.ID.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Read secret failed", err.Error())
-			return
-		}
+		// name/key/value_version 都沒變（上面的 guard 已經擋掉「只改 value」的情況，
+		// 所以真的走到這裡代表整個 model 跟 state 一致）——不需要打 PATCH 或 rotate，
+		// id/name 這些欄位也早就跟 state 一樣，不必為了組 state 多打一次 GetSecret。
+		resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
+		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, secretFromAPI(got, plan))...)
@@ -216,6 +232,16 @@ func buildSecretUpdateInput(plan, state secretResourceModel) client.SecretUpdate
 // `value` without bumping `value_version` is intentionally NOT a trigger.
 func shouldRotateSecret(plan, state secretResourceModel) bool {
 	return !plan.ValueVersion.Equal(state.ValueVersion)
+}
+
+// valueChangedWithoutVersionBump reports the one write-only-secret footgun
+// Update() refuses to silently accept: `value` changed but `value_version`
+// didn't move with it. shouldRotateSecret would return false in that case, so
+// Update() would neither PATCH nor rotate — yet without this guard it would
+// still happily write the new `value` into state, making the live secret's
+// drift from state permanent and invisible to any future plan.
+func valueChangedWithoutVersionBump(plan, state secretResourceModel) bool {
+	return !plan.Value.Equal(state.Value) && plan.ValueVersion.Equal(state.ValueVersion)
 }
 
 // reconcileKey preserves the caller's own casing for `key` unless the API's

@@ -105,6 +105,49 @@ func TestShouldRotateSecret(t *testing.T) {
 	}
 }
 
+func TestValueChangedWithoutVersionBump(t *testing.T) {
+	base := secretResourceModel{
+		ID: types.StringValue("s1"), CompanyID: types.StringValue("co1"),
+		Name: types.StringValue("gh-token"), Key: types.StringValue("gh_token"),
+		Value: types.StringValue("v1"), ValueVersion: types.StringValue("1"),
+	}
+
+	// 只改 value：這正是 guard 要擋的情境——沒有 bump 就不會 rotate，
+	// 但若照舊寫回 state，之後也不會再有任何 diff 讓人發現漏了 rotate。
+	onlyValue := base
+	onlyValue.Value = types.StringValue("v2")
+	if !valueChangedWithoutVersionBump(onlyValue, base) {
+		t.Error("valueChangedWithoutVersionBump = false, want true when only value changed")
+	}
+
+	// 只改 value_version（value 沒變也合法，例如純粹想強制 rotate 同一個值）：正常 rotate，不是 guard 情境。
+	onlyVersion := base
+	onlyVersion.ValueVersion = types.StringValue("2")
+	if valueChangedWithoutVersionBump(onlyVersion, base) {
+		t.Error("valueChangedWithoutVersionBump = true, want false when only value_version changed")
+	}
+
+	// value 和 value_version 一起改：正常 rotate，不是 guard 情境。
+	both := base
+	both.Value = types.StringValue("v2")
+	both.ValueVersion = types.StringValue("2")
+	if valueChangedWithoutVersionBump(both, base) {
+		t.Error("valueChangedWithoutVersionBump = true, want false when value and value_version both changed")
+	}
+
+	// 只改 name：跟 value/value_version 無關，不是 guard 情境。
+	onlyName := base
+	onlyName.Name = types.StringValue("gh-token-renamed")
+	if valueChangedWithoutVersionBump(onlyName, base) {
+		t.Error("valueChangedWithoutVersionBump = true, want false when only name changed")
+	}
+
+	// 什麼都沒變：不是 guard 情境。
+	if valueChangedWithoutVersionBump(base, base) {
+		t.Error("valueChangedWithoutVersionBump = true, want false when nothing changed")
+	}
+}
+
 func TestReconcileKey_SameCaseInsensitive_KeepsPrior(t *testing.T) {
 	// live 探測：paperclip 把 key 正規化成小寫（"GH_TOKEN" → "gh_token"）。
 	// 若只是大小寫不同，保留呼叫端（config/prior state）原本的大小寫，避免每次 Read 都出現假 diff。
