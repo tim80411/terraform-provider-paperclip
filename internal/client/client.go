@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type Client struct {
@@ -35,6 +36,7 @@ func IsNotFound(err error) bool {
 }
 
 func New(baseURL, apiKey string) *Client {
+	baseURL = strings.TrimRight(baseURL, "/")
 	return &Client{BaseURL: baseURL, APIKey: apiKey, HTTP: http.DefaultClient}
 }
 

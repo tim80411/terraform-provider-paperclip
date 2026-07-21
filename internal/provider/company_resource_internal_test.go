@@ -12,7 +12,6 @@ func TestBuildCompanyUpdateInput_NothingChanged(t *testing.T) {
 		ID:          types.StringValue("c1"),
 		Name:        types.StringValue("Acme"),
 		Description: types.StringValue("d1"),
-		Slug:        types.StringValue("acme"),
 	}
 	plan := state
 
@@ -24,9 +23,6 @@ func TestBuildCompanyUpdateInput_NothingChanged(t *testing.T) {
 	if in.Description != nil {
 		t.Errorf("Description = %v, want nil", *in.Description)
 	}
-	if in.Slug != nil {
-		t.Errorf("Slug = %v, want nil", *in.Slug)
-	}
 }
 
 func TestBuildCompanyUpdateInput_OnlyNameChanged(t *testing.T) {
@@ -34,7 +30,6 @@ func TestBuildCompanyUpdateInput_OnlyNameChanged(t *testing.T) {
 		ID:          types.StringValue("c1"),
 		Name:        types.StringValue("Acme"),
 		Description: types.StringValue("d1"),
-		Slug:        types.StringValue("acme"),
 	}
 	plan := state
 	plan.Name = types.StringValue("new")
@@ -47,9 +42,6 @@ func TestBuildCompanyUpdateInput_OnlyNameChanged(t *testing.T) {
 	if in.Description != nil {
 		t.Errorf("Description = %v, want nil", *in.Description)
 	}
-	if in.Slug != nil {
-		t.Errorf("Slug = %v, want nil", *in.Slug)
-	}
 }
 
 func TestBuildCompanyUpdateInput_OnlyDescriptionChanged(t *testing.T) {
@@ -57,7 +49,6 @@ func TestBuildCompanyUpdateInput_OnlyDescriptionChanged(t *testing.T) {
 		ID:          types.StringValue("c1"),
 		Name:        types.StringValue("Acme"),
 		Description: types.StringValue("d1"),
-		Slug:        types.StringValue("acme"),
 	}
 	plan := state
 	plan.Description = types.StringValue("d2")
@@ -69,8 +60,5 @@ func TestBuildCompanyUpdateInput_OnlyDescriptionChanged(t *testing.T) {
 	}
 	if in.Name != nil {
 		t.Errorf("Name = %v, want nil", *in.Name)
-	}
-	if in.Slug != nil {
-		t.Errorf("Slug = %v, want nil", *in.Slug)
 	}
 }

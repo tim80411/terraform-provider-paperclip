@@ -1,4 +1,5 @@
-// internal/provider/company_resource.go （覆寫 Task 4 的空殼）
+// internal/provider/company_resource.go
+// paperclip_company resource: declarative CRUD + import over the /api/companies endpoints.
 package provider
 
 import (
@@ -23,7 +24,6 @@ type companyResourceModel struct {
 	ID          types.String `tfsdk:"id"`
 	Name        types.String `tfsdk:"name"`
 	Description types.String `tfsdk:"description"`
-	Slug        types.String `tfsdk:"slug"`
 }
 
 func (r *companyResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -36,7 +36,6 @@ func (r *companyResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"id":          schema.StringAttribute{Computed: true},
 			"name":        schema.StringAttribute{Required: true},
 			"description": schema.StringAttribute{Optional: true, Computed: true},
-			"slug":        schema.StringAttribute{Optional: true, Computed: true},
 		},
 	}
 }
@@ -62,9 +61,6 @@ func (r *companyResource) Create(ctx context.Context, req resource.CreateRequest
 	in := client.CompanyCreateInput{Name: plan.Name.ValueString()}
 	if !plan.Description.IsNull() {
 		in.Description = plan.Description.ValueString()
-	}
-	if !plan.Slug.IsNull() {
-		in.Slug = plan.Slug.ValueString()
 	}
 	got, err := r.client.CreateCompany(ctx, in)
 	if err != nil {
@@ -115,7 +111,7 @@ func (r *companyResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if err := r.client.DeleteCompany(ctx, state.ID.ValueString()); err != nil {
+	if err := r.client.DeleteCompany(ctx, state.ID.ValueString()); err != nil && !client.IsNotFound(err) {
 		resp.Diagnostics.AddError("Delete company failed", err.Error())
 	}
 }
@@ -136,10 +132,6 @@ func buildCompanyUpdateInput(plan, state companyResourceModel) client.CompanyUpd
 		v := plan.Description.ValueString()
 		in.Description = &v
 	}
-	if !plan.Slug.Equal(state.Slug) && !plan.Slug.IsNull() {
-		v := plan.Slug.ValueString()
-		in.Slug = &v
-	}
 	return in
 }
 
@@ -148,7 +140,6 @@ func companyFromAPI(c *client.Company) companyResourceModel {
 		ID:          types.StringValue(c.ID),
 		Name:        types.StringValue(c.Name),
 		Description: types.StringValue(c.Description),
-		Slug:        types.StringValue(c.Slug),
 	}
 }
 

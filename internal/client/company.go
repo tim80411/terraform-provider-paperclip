@@ -6,20 +6,17 @@ type Company struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	Slug        string `json:"slug,omitempty"`
 }
 
 type CompanyCreateInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	Slug        string `json:"slug,omitempty"`
 }
 
 // 指標 + omitempty：nil 欄位不進 JSON body → API partial-merge 保留（spec §6.3）
 type CompanyUpdateInput struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
-	Slug        *string `json:"slug,omitempty"`
 }
 
 func (c *Client) CreateCompany(ctx context.Context, in CompanyCreateInput) (*Company, error) {

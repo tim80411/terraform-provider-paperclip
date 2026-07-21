@@ -2,6 +2,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
@@ -10,6 +11,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+
+	"github.com/tim80411/terraform-provider-paperclip/internal/client"
 )
 
 func protoV6Factories() map[string]func() (tfprotov6.ProviderServer, error) {
@@ -25,13 +29,28 @@ func preCheck(t *testing.T) {
 }
 
 func TestAccCompanyResource_lifecycle(t *testing.T) {
-	preCheck(t)
 	name := fmt.Sprintf("tfacc-scratch-%d", time.Now().Unix()) // 唯一名，絕不撞 既有正式公司
 	renamed := name + "-renamed"
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: protoV6Factories(),
 		PreCheck:                 func() { preCheck(t) },
+		CheckDestroy: func(s *terraform.State) error {
+			c := client.New(os.Getenv("PAPERCLIP_API_BASE"), os.Getenv("PAPERCLIP_API_KEY"))
+			for _, rs := range s.RootModule().Resources {
+				if rs.Type != "paperclip_company" {
+					continue
+				}
+				_, err := c.GetCompany(context.Background(), rs.Primary.ID)
+				if err == nil {
+					return fmt.Errorf("company %s still exists after destroy", rs.Primary.ID)
+				}
+				if !client.IsNotFound(err) {
+					return fmt.Errorf("unexpected error checking destroy: %w", err)
+				}
+			}
+			return nil
+		},
 		Steps: []resource.TestStep{
 			{ // create + read
 				Config: fmt.Sprintf(`resource "paperclip_company" "s" { name = %q }`, name),
