@@ -81,6 +81,40 @@ func TestUpdateCompany_OmitsUnsetFields(t *testing.T) {
 	}
 }
 
+func TestGetCompany_404IsNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	_, err := c.GetCompany(context.Background(), "missing-id")
+	if err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+	if !IsNotFound(err) {
+		t.Errorf("IsNotFound(err) = false, want true for 404 response; err = %v", err)
+	}
+}
+
+func TestGetCompany_500IsNotNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte(`{"error":"internal"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	_, err := c.GetCompany(context.Background(), "some-id")
+	if err == nil {
+		t.Fatal("expected error on 500, got nil")
+	}
+	if IsNotFound(err) {
+		t.Errorf("IsNotFound(err) = true, want false for 500 response; err = %v", err)
+	}
+}
+
 func TestCreateCompany_ParsesID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(201)

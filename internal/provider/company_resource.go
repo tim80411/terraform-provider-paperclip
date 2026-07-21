@@ -82,6 +82,10 @@ func (r *companyResource) Read(ctx context.Context, req resource.ReadRequest, re
 	}
 	got, err := r.client.GetCompany(ctx, state.ID.ValueString())
 	if err != nil {
+		if client.IsNotFound(err) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Read company failed", err.Error())
 		return
 	}
@@ -96,19 +100,7 @@ func (r *companyResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 	// 只送有變的欄位（指標）→ 保留未管欄位（spec §6.3）
-	var in client.CompanyUpdateInput
-	if !plan.Name.Equal(state.Name) {
-		v := plan.Name.ValueString()
-		in.Name = &v
-	}
-	if !plan.Description.Equal(state.Description) && !plan.Description.IsNull() {
-		v := plan.Description.ValueString()
-		in.Description = &v
-	}
-	if !plan.Slug.Equal(state.Slug) && !plan.Slug.IsNull() {
-		v := plan.Slug.ValueString()
-		in.Slug = &v
-	}
+	in := buildCompanyUpdateInput(plan, state)
 	got, err := r.client.UpdateCompany(ctx, state.ID.ValueString(), in)
 	if err != nil {
 		resp.Diagnostics.AddError("Update company failed", err.Error())
@@ -130,6 +122,25 @@ func (r *companyResource) Delete(ctx context.Context, req resource.DeleteRequest
 
 func (r *companyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// buildCompanyUpdateInput returns an update input containing ONLY the fields
+// that changed between state and plan (spec §6.3: never send unchanged fields).
+func buildCompanyUpdateInput(plan, state companyResourceModel) client.CompanyUpdateInput {
+	var in client.CompanyUpdateInput
+	if !plan.Name.Equal(state.Name) {
+		v := plan.Name.ValueString()
+		in.Name = &v
+	}
+	if !plan.Description.Equal(state.Description) && !plan.Description.IsNull() {
+		v := plan.Description.ValueString()
+		in.Description = &v
+	}
+	if !plan.Slug.Equal(state.Slug) && !plan.Slug.IsNull() {
+		v := plan.Slug.ValueString()
+		in.Slug = &v
+	}
+	return in
 }
 
 func companyFromAPI(c *client.Company) companyResourceModel {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,24 @@ type Client struct {
 	BaseURL string
 	APIKey  string
 	HTTP    *http.Client
+}
+
+// APIError represents a non-2xx response from the paperclip API.
+type APIError struct {
+	StatusCode int
+	Method     string
+	Path       string
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("paperclip API %s %s: status %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
+// IsNotFound reports whether err is a paperclip API error with HTTP 404.
+func IsNotFound(err error) bool {
+	var e *APIError
+	return errors.As(err, &e) && e.StatusCode == http.StatusNotFound
 }
 
 func New(baseURL, apiKey string) *Client {
@@ -43,7 +62,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("paperclip API %s %s: status %d: %s", method, path, resp.StatusCode, string(data))
+		return &APIError{StatusCode: resp.StatusCode, Method: method, Path: path, Body: string(data)}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
