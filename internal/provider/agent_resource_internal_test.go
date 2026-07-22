@@ -1,10 +1,75 @@
 package provider
 
 import (
+	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
+
+// mkSkills builds a known list; mkSkills() is the empty list [], distinct from
+// the null list (types.ListNull) used for "attribute absent / unmanaged".
+func mkSkills(vals ...string) types.List {
+	elems := make([]attr.Value, 0, len(vals))
+	for _, v := range vals {
+		elems = append(elems, types.StringValue(v))
+	}
+	return types.ListValueMust(types.StringType, elems)
+}
+
+// TestReconcileDesiredSkills is the agent twin of TestReconcileGoalIds. It pins
+// the same drift-detection contract for desired_skills so a full out-of-band
+// skill clear is surfaced instead of hidden. reconcileDesiredSkills runs ONLY on
+// Read/Import (Create/Update set state=plan directly), so there is no create/
+// apply convergence to break — but the null/unknown-preserving cases still matter
+// to avoid a phantom null↔[] diff for an unmanaged desired_skills.
+func TestReconcileDesiredSkills(t *testing.T) {
+	ctx := context.Background()
+
+	// server has skills → reflect them (base irrelevant).
+	got, d := reconcileDesiredSkills(ctx, types.ListNull(types.StringType), []string{"s1"})
+	if d.HasError() {
+		t.Fatalf("unexpected diags: %+v", d)
+	}
+	if got.IsNull() || len(got.Elements()) != 1 {
+		t.Errorf("server skills must be reflected, got %+v", got)
+	}
+
+	// server empty + base NULL (unmanaged / import) → preserve null.
+	got, d = reconcileDesiredSkills(ctx, types.ListNull(types.StringType), nil)
+	if d.HasError() {
+		t.Fatalf("unexpected diags: %+v", d)
+	}
+	if !got.IsNull() {
+		t.Errorf("server empty + base null must stay null, got %+v", got)
+	}
+
+	// server empty + base UNKNOWN → preserve unknown.
+	got, _ = reconcileDesiredSkills(ctx, types.ListUnknown(types.StringType), nil)
+	if !got.IsUnknown() {
+		t.Errorf("server empty + base unknown must stay unknown, got %+v", got)
+	}
+
+	// server empty + base EMPTY known list → empty list (no churn).
+	got, d = reconcileDesiredSkills(ctx, mkSkills(), nil)
+	if d.HasError() {
+		t.Fatalf("unexpected diags: %+v", d)
+	}
+	if got.IsNull() || len(got.Elements()) != 0 {
+		t.Errorf("server empty + base empty-list must be empty list, got %+v", got)
+	}
+
+	// THE FIX: server empty + base POPULATED known list → EMPTY list so a full
+	// out-of-band skill clear (state=[s1], server=[]) surfaces as drift.
+	got, d = reconcileDesiredSkills(ctx, mkSkills("s1"), nil)
+	if d.HasError() {
+		t.Fatalf("unexpected diags: %+v", d)
+	}
+	if got.IsNull() || len(got.Elements()) != 0 {
+		t.Errorf("out-of-band skill clear (state=[s1], server=[]) must reflect [] as drift, got %+v", got)
+	}
+}
 
 func agentBaseModel() agentResourceModel {
 	return agentResourceModel{

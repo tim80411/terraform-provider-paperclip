@@ -564,12 +564,27 @@ func extractDesiredSkills(ac map[string]any) []string {
 	return skills
 }
 
-// reconcileDesiredSkills reflects server skills when present; when the server
-// has none it preserves `base` so a null (unmanaged) and an empty list don't
-// oscillate into a phantom diff.
+// reconcileDesiredSkills maps the server's skills onto state so drift is
+// detectable without churning a phantom diff. It is the twin of reconcileGoalIds
+// and runs ONLY on Read/Import (Create/Update set state=plan directly), so there
+// is no create/apply convergence to break here. When the server reports NO
+// skills, `base` disambiguates two cases:
+//
+//   - base null/unknown → return base. A null base means desired_skills is absent
+//     (unmanaged here) or this is an import read; reflecting the server's [] would
+//     oscillate against that null into a phantom null↔[] diff.
+//   - base is a populated known list → return an EMPTY list. state had skills but
+//     the server now has none: a full out-of-band clear. Returning base would hide
+//     it; reflecting [] surfaces the drift so the next plan re-syncs the skills.
+//
+// A base that is an EMPTY known list (explicit `desired_skills = []`) lands in the
+// empty-list branch, which matches it exactly (no churn).
 func reconcileDesiredSkills(ctx context.Context, base types.List, serverSkills []string) (types.List, diag.Diagnostics) {
 	if len(serverSkills) == 0 {
-		return base, nil
+		if base.IsNull() || base.IsUnknown() {
+			return base, nil
+		}
+		return types.ListValueFrom(ctx, types.StringType, []string{})
 	}
 	return types.ListValueFrom(ctx, types.StringType, serverSkills)
 }

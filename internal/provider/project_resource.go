@@ -177,7 +177,12 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 		in.LeadAgentId = plan.LeadAgentId.ValueString()
 	}
 	if !plan.GoalIds.IsNull() && !plan.GoalIds.IsUnknown() {
-		in.GoalIds = goalIdsToSlice(plan.GoalIds)
+		ids, d := goalIdsToSlice(plan.GoalIds)
+		resp.Diagnostics.Append(d...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		in.GoalIds = ids
 	}
 	ws, diags := buildWorkspaceCreateInput(ctx, plan.Workspace)
 	resp.Diagnostics.Append(diags...)
@@ -232,7 +237,11 @@ func (r *projectResource) Update(ctx context.Context, req resource.UpdateRequest
 
 	// 只送有變的欄位（scalar 指標、lead_agent_id 三態、goal_ids 清空送 []）→ 保留未管欄位。
 	// workspace 是 RequiresReplace，永遠不會走到這裡（有變就重建），所以 update input 沒有它。
-	in := buildProjectUpdateInput(plan, state)
+	in, diags := buildProjectUpdateInput(plan, state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	if !projectUpdateInputEmpty(in) {
 		if _, err := r.client.UpdateProject(ctx, state.ID.ValueString(), in); err != nil {
 			resp.Diagnostics.AddError("Update project failed", err.Error())
@@ -277,18 +286,30 @@ func (r *projectResource) ImportState(ctx context.Context, req resource.ImportSt
 // all links) rather than being omitted. Set iteration order is not meaningful:
 // the API reorders goalIds into its own canonical order anyway (which is why the
 // attribute is a Set, not a List), so send-order does not matter.
-func goalIdsToSlice(set types.Set) []string {
+//
+// The non-String else-branch is defensive: goal_ids' ElementType is StringType,
+// so the framework guarantees every element is a types.String and this branch is
+// unreachable via the public Set API. It surfaces a diagnostic rather than
+// silently dropping an id — a dropped id would mis-set or wrongly clear a link.
+func goalIdsToSlice(set types.Set) ([]string, diag.Diagnostics) {
+	var diags diag.Diagnostics
 	if set.IsNull() || set.IsUnknown() {
-		return []string{}
+		return []string{}, diags
 	}
 	elems := set.Elements()
 	out := make([]string, 0, len(elems))
 	for _, e := range elems {
-		if s, ok := e.(types.String); ok {
-			out = append(out, s.ValueString())
+		s, ok := e.(types.String)
+		if !ok {
+			diags.AddError(
+				"Unexpected goal_ids element type",
+				fmt.Sprintf("goal_ids element has type %T, expected string; refusing to silently drop it.", e),
+			)
+			continue
 		}
+		out = append(out, s.ValueString())
 	}
-	return out
+	return out, diags
 }
 
 // buildWorkspaceCreateInput turns the nested `workspace` object into the inline
@@ -324,8 +345,9 @@ func buildWorkspaceCreateInput(ctx context.Context, obj types.Object) (*client.W
 // fields (spec §6.3). lead_agent_id uses the tri-state RawMessage encoding (mirrors
 // goal/agent refs) and goal_ids uses a *[]string so an emptied/removed list sends
 // an explicit [] and actually clears the links, per the removal=clear policy.
-func buildProjectUpdateInput(plan, state projectResourceModel) client.ProjectUpdateInput {
+func buildProjectUpdateInput(plan, state projectResourceModel) (client.ProjectUpdateInput, diag.Diagnostics) {
 	var in client.ProjectUpdateInput
+	var diags diag.Diagnostics
 	if !plan.Name.Equal(state.Name) {
 		v := plan.Name.ValueString()
 		in.Name = &v
@@ -349,10 +371,11 @@ func buildProjectUpdateInput(plan, state projectResourceModel) client.ProjectUpd
 	}
 	// goal_ids：有變就送（null/[]→[] 清空；[a,b]→[a,b]）；沒變→nil pointer(不送，保留)。
 	if !plan.GoalIds.Equal(state.GoalIds) {
-		ids := goalIdsToSlice(plan.GoalIds)
+		ids, d := goalIdsToSlice(plan.GoalIds)
+		diags.Append(d...)
 		in.GoalIds = &ids
 	}
-	return in
+	return in, diags
 }
 
 func projectUpdateInputEmpty(in client.ProjectUpdateInput) bool {
@@ -385,13 +408,31 @@ func projectFromAPI(ctx context.Context, got *client.Project, base projectResour
 	return m, diags
 }
 
-// reconcileGoalIds reflects server goal ids when present; when the server has
-// none it preserves `base` so a null (attribute absent) and an empty set don't
-// oscillate into a phantom diff (mirrors reconcileDesiredSkills). The result is a
-// Set, so the server's canonical ordering never shows up as a diff.
+// reconcileGoalIds maps the server's goal ids onto state so drift is detectable
+// without churning a phantom diff. The result is a Set, so the server's canonical
+// ordering never shows up as a diff. When the server reports NO goals, `base`
+// disambiguates two cases (base = plan on Create/Update, state on Read/Import):
+//
+//   - base null/unknown → return base. A null base means the attribute is absent
+//     (config declares no goal_ids) or this is a fresh/import read; reflecting the
+//     server's [] would oscillate against that null into a phantom null↔[] diff.
+//   - base is a populated known set → return an EMPTY set. state had goals but the
+//     server now has none: a full out-of-band clear. Returning base here would
+//     hide it (the original blind spot); reflecting [] surfaces the drift so the
+//     next plan restores the declared links.
+//
+// This does NOT reintroduce create/apply non-convergence: the API returns the
+// just-written goalIds in its Create response and in the Update read-back GET
+// (live-proven 2026-07-22), so serverIds is non-empty whenever goals were
+// declared — the populated-base branch is only reached by a genuine Read-time
+// clear. A base that is an EMPTY known set (explicit `goal_ids = []`) also lands
+// in the empty-set branch, which matches it exactly (no churn).
 func reconcileGoalIds(ctx context.Context, base types.Set, serverIds []string) (types.Set, diag.Diagnostics) {
 	if len(serverIds) == 0 {
-		return base, nil
+		if base.IsNull() || base.IsUnknown() {
+			return base, nil
+		}
+		return types.SetValueFrom(ctx, types.StringType, []string{})
 	}
 	return types.SetValueFrom(ctx, types.StringType, serverIds)
 }
