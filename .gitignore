@@ -2,3 +2,6 @@ terraform-provider-paperclip
 *.tfstate*
 .terraform/
 .terraform.lock.hcl
+
+# 本地 issue tracker（不公開）
+issues/
