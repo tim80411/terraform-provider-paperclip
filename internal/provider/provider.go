@@ -82,5 +82,7 @@ func (p *paperclipProvider) Resources(_ context.Context) []func() resource.Resou
 }
 
 func (p *paperclipProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{
+		NewCompanyDataSource,
+	}
 }

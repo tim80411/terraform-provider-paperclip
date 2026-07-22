@@ -27,6 +27,15 @@ func (c *Client) CreateCompany(ctx context.Context, in CompanyCreateInput) (*Com
 	return &out, nil
 }
 
+// GET /api/companies 回傳全公司陣列（server route 實證：res.json(result.filter(...))）。
+func (c *Client) ListCompanies(ctx context.Context) ([]Company, error) {
+	var out []Company
+	if err := c.do(ctx, "GET", "/api/companies", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *Client) GetCompany(ctx context.Context, id string) (*Company, error) {
 	var out Company
 	if err := c.do(ctx, "GET", "/api/companies/"+id, nil, &out); err != nil {
