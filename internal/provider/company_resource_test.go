@@ -29,7 +29,7 @@ func preCheck(t *testing.T) {
 }
 
 func TestAccCompanyResource_lifecycle(t *testing.T) {
-	name := fmt.Sprintf("tfacc-scratch-%d", time.Now().Unix()) // 唯一名，絕不撞 既有正式公司
+	name := fmt.Sprintf("tfacc-scratch-%d", time.Now().Unix()) // 唯一名，絕不撞既有正式公司
 	renamed := name + "-renamed"
 
 	resource.Test(t, resource.TestCase{

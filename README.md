@@ -1,6 +1,6 @@
 # terraform-provider-paperclip
 
-宣告式管理 paperclip 公司內容（見 `docs/superpowers/specs/2026-07-21-paperclip-terraform-provider-design.md`）。
+宣告式管理 paperclip 公司內容。
 
 ## 開發安裝（dev_overrides）
 
@@ -30,7 +30,7 @@ cd examples/smoke && terraform plan
 ## 測試
 
 - 單元：`make test`
-- 驗收（會對 live 建/刪 scratch 公司，**不碰 既有正式公司**）：`make testacc`
+- 驗收（會對 live 建/刪 scratch 公司，**不碰既有正式公司**）：`make testacc`
 
 ## vendored spec
 

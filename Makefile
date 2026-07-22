@@ -1,4 +1,4 @@
-# platform/terraform-provider-paperclip/Makefile
+# terraform-provider-paperclip/Makefile
 BINARY=terraform-provider-paperclip
 build:
 	go build -o $(BINARY) .
