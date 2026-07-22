@@ -6,6 +6,9 @@ type Company struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// BudgetMonthlyCents: DB default 0（無 omitempty——0 有語意：預設/無上限）。
+	// 只由 paperclip_company_budget resource 管理；company resource 不碰它。
+	BudgetMonthlyCents int64 `json:"budgetMonthlyCents"`
 }
 
 type CompanyCreateInput struct {
