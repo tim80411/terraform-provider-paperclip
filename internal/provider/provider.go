@@ -81,6 +81,7 @@ func (p *paperclipProvider) Resources(_ context.Context) []func() resource.Resou
 		NewProjectWorkspaceResource,
 		NewRoutineResource,
 		NewRoutineTriggerResource,
+		NewSecretProviderConfigResource,
 	}
 }
 
