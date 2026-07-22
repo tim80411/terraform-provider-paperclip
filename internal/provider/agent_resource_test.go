@@ -88,6 +88,37 @@ func checkAgentAdapterKeysAbsent(resourceName string, absentKeys ...string) reso
 	}
 }
 
+// checkAgentModelClearedSkillsSurvive GETs the agent via the raw API and asserts
+// `model` is GONE from adapterConfig after the WHOLE adapter block was removed (I-2),
+// WHILE paperclip-owned keys (paperclipSkillSync + instructions*) survive. This is the
+// opposite polarity of checkAgentAdapterKeysAbsent (which requires model to remain): here
+// the user dropped the entire block, so model itself must clear. Live-proven 2026-07-22
+// that a model-less replaceAdapterConfig=true PATCH converges (agent ends model-less).
+func checkAgentModelClearedSkillsSurvive(resourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("%s not in state", resourceName)
+		}
+		c := client.New(os.Getenv("PAPERCLIP_API_BASE"), os.Getenv("PAPERCLIP_API_KEY"))
+		got, err := c.GetAgent(context.Background(), rs.Primary.ID)
+		if err != nil {
+			return fmt.Errorf("GetAgent(%s): %w", rs.Primary.ID, err)
+		}
+		ac := got.AdapterConfig
+		if v, present := ac["model"]; present && v != nil {
+			return fmt.Errorf("adapterConfig.model = %v, want CLEARED after whole-block removal", v)
+		}
+		if _, ok := ac["paperclipSkillSync"].(map[string]any); !ok {
+			return fmt.Errorf("paperclipSkillSync MISSING after model clear — unmanaged bag wrongly wiped: %+v", ac)
+		}
+		if _, ok := ac["instructionsEntryFile"]; !ok {
+			return fmt.Errorf("instructions* MISSING after model clear: %+v", ac)
+		}
+		return nil
+	}
+}
+
 // checkAgentReportsToNull asserts (raw API) that the agent has been reset to root.
 func checkAgentReportsToNull(resourceName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
@@ -236,6 +267,80 @@ resource "paperclip_agent" "sub" {
 				ResourceName:      "paperclip_agent.sub",
 				ImportState:       true,
 				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+// TestAccAgentResource_removeAdapterBlock is the I-2 convergence pin. Removing the
+// ENTIRE adapter block (adapter = null in the plan) drives buildManagedAdapterConfig
+// to {} → buildAdapterConfigPatch puts `model` (a Required-within-block key) into the
+// clear-set → a replaceAdapterConfig=true PATCH with NO model. Live probe (2026-07-22)
+// proved the API accepts that and the agent converges to a model-less state (matching
+// Reflection Coach) while paperclipSkillSync survives. This test locks that: the
+// framework's built-in post-apply idempotency check FAILS if the second step doesn't
+// converge, and the read-back proves model is actually gone live.
+func TestAccAgentResource_removeAdapterBlock(t *testing.T) {
+	ts := time.Now().Unix()
+	companyName := fmt.Sprintf("tfacc-agentblk-%d", ts)
+
+	// withAdapter toggles the ENTIRE adapter block. desired_skills stays constant so
+	// paperclipSkillSync exists and we can prove it survives the model clear.
+	config := func(withAdapter bool) string {
+		adapterBlock := ""
+		if withAdapter {
+			adapterBlock = "  adapter = {\n    model  = \"claude-sonnet-4-6\"\n    chrome = true\n  }\n"
+		}
+		return fmt.Sprintf(`
+resource "paperclip_company" "c" {
+  name = %q
+}
+
+resource "paperclip_agent" "a" {
+  company_id     = paperclip_company.c.id
+  name           = "Blocky"
+  role           = "engineer"
+  desired_skills = [%q]
+%s}
+`, companyName, boardSkill, adapterBlock)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6Factories(),
+		PreCheck:                 func() { preCheck(t) },
+		CheckDestroy: func(s *terraform.State) error {
+			c := client.New(os.Getenv("PAPERCLIP_API_BASE"), os.Getenv("PAPERCLIP_API_KEY"))
+			for _, rs := range s.RootModule().Resources {
+				if rs.Type != "paperclip_agent" {
+					continue
+				}
+				_, err := c.GetAgent(context.Background(), rs.Primary.ID)
+				if err == nil {
+					return fmt.Errorf("agent %s still exists after destroy", rs.Primary.ID)
+				}
+				if !client.IsGone(err) {
+					return fmt.Errorf("unexpected error checking destroy: %w", err)
+				}
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{ // create WITH adapter block (model+chrome) + a skill → paperclipSkillSync exists
+				Config: config(true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("paperclip_agent.a", "adapter.model", "claude-sonnet-4-6"),
+					resource.TestCheckResourceAttr("paperclip_agent.a", "adapter.chrome", "true"),
+					checkAgentAdapterSurvives("paperclip_agent.a", "claude-sonnet-4-6"),
+				),
+			},
+			{ // REMOVE the ENTIRE adapter block. model → clear-set → replaceAdapterConfig=true
+			  // with no model. Built-in idempotency check FAILS if it doesn't converge; read-back
+			  // proves model gone live and paperclipSkillSync intact.
+				Config: config(false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("paperclip_agent.a", "adapter.model"),
+					checkAgentModelClearedSkillsSurvive("paperclip_agent.a"),
+				),
 			},
 		},
 	})

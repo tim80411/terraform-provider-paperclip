@@ -65,12 +65,21 @@ func (r *goalResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"level": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
+				// UseStateForUnknown：Optional+Computed 若不加這個，config 省略 level 時，任何一次
+				// 其他欄位的 in-place update 都會讓 level 在 plan 變成 unknown，buildGoalUpdateInput
+				// 就會送出空字串 ""（GoalUpdateInput.Level 是 *string，omitempty 不會丟掉指標指向的 ""），
+				// API 回 400 invalid_enum。加上它後，未指定時保留既有 state 值、不觸發假 update。
+				// 與 project.status 同一修法（project_resource.go）。
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 				Description: `目標層級。live 探測 enum：company/team/agent/task。省略時 API 預設 "task"，` +
 					"落地成 state 後即固定，之後只能靠明確改 config 值來變更（Terraform Optional+Computed 慣例）。",
 			},
 			"status": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
+				// UseStateForUnknown：理由同 level（省略 status 時避免 update 讓它變 unknown → 送 ""
+				// → API 400 invalid_enum）。與 project.status 同一修法。
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 				Description: `目標狀態。live 探測 enum：planned/active/achieved/cancelled。省略時 API 預設 ` +
 					`"planned"，落地成 state 後即固定。`,
 			},

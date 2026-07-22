@@ -435,6 +435,17 @@ func buildAgentUpdateInput(plan, state agentResourceModel) client.AgentUpdateInp
 // returns a fresh copy and we only delete from that copy). Only keys the provider
 // manages are ever removed — priorManaged/planManaged come from buildManagedAdapterConfig,
 // which never surfaces a server-owned key.
+//
+// WHOLE-BLOCK REMOVAL (adapter = null in the plan): planManaged is {} so EVERY prior
+// managed key — including the Required-within-block `model` — is deleted and the PATCH
+// replaces the config with a model-less bag (only the paperclip-owned keys survive).
+// This is INTENTIONAL and probe-verified: live probe 2026-07-22 against a scratch agent
+// showed PATCH replaceAdapterConfig=true with a bag omitting `model` returns 200 — the
+// agent converges to a model-less state (matching Reflection Coach, which runs with no
+// adapter at all) while paperclipSkillSync + instructions* are preserved. Do NOT instead
+// exclude `model` from the clearable set: that would leave the live `model` set while
+// state has adapter=null, producing a permanent phantom diff on the next Read (strictly
+// worse). See TestAccAgentResource_removeAdapterBlock for the convergence acceptance pin.
 func buildAdapterConfigPatch(current, planManaged, priorManaged map[string]any) (map[string]any, bool) {
 	merged := client.MergeAdapterConfig(current, planManaged)
 	replace := false

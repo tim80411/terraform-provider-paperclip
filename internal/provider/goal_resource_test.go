@@ -133,3 +133,71 @@ resource "paperclip_goal" "child" {
 		},
 	})
 }
+
+// TestAccGoalResource_omitEnumsThenUpdate is the I-1 regression pin. A goal that
+// OMITS both level and status (relying on the API defaults task/planned, live-confirmed
+// 2026-07-22), then an in-place update of ANOTHER field (description). Without
+// UseStateForUnknown on level/status, the omitted Optional+Computed enums go UNKNOWN on
+// the second plan → buildGoalUpdateInput serializes "level":""/"status":"" (the *string
+// omitempty can't drop a pointer-to-"") → API 400 invalid_enum. With the plan modifier
+// the enums are held from prior state, so the update carries only description and the
+// framework's post-apply idempotency check passes. This is the same guard project.status
+// already had; the goal resource lacked it.
+func TestAccGoalResource_omitEnumsThenUpdate(t *testing.T) {
+	ts := time.Now().Unix()
+	companyName := fmt.Sprintf("tfacc-goalenum-%d", ts)
+
+	config := func(description string) string {
+		return fmt.Sprintf(`
+resource "paperclip_company" "c" {
+  name = %q
+}
+
+resource "paperclip_goal" "g" {
+  company_id  = paperclip_company.c.id
+  title       = "OKR draft"
+  description = %q
+}
+`, companyName, description)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6Factories(),
+		PreCheck:                 func() { preCheck(t) },
+		CheckDestroy: func(s *terraform.State) error {
+			c := client.New(os.Getenv("PAPERCLIP_API_BASE"), os.Getenv("PAPERCLIP_API_KEY"))
+			for _, rs := range s.RootModule().Resources {
+				if rs.Type != "paperclip_goal" {
+					continue
+				}
+				_, err := c.GetGoal(context.Background(), rs.Primary.ID)
+				if err == nil {
+					return fmt.Errorf("goal %s still exists after destroy", rs.Primary.ID)
+				}
+				if !client.IsGone(err) {
+					return fmt.Errorf("unexpected error checking destroy: %w", err)
+				}
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{ // create OMITTING level+status → API defaults land in state (task/planned)
+				Config: config("first"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("paperclip_goal.g", "level", "task"),
+					resource.TestCheckResourceAttr("paperclip_goal.g", "status", "planned"),
+				),
+			},
+			{ // in-place update of description ONLY. Without the fix this 400s (level/status
+			  // become unknown → sent as ""); with it, the enums hold from state and the plan
+			  // converges (the built-in post-apply idempotency check is the regression proof).
+				Config: config("second"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("paperclip_goal.g", "description", "second"),
+					resource.TestCheckResourceAttr("paperclip_goal.g", "level", "task"),
+					resource.TestCheckResourceAttr("paperclip_goal.g", "status", "planned"),
+				),
+			},
+		},
+	})
+}
