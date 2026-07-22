@@ -11,6 +11,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -106,14 +107,14 @@ func (r *agentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 					"radar|swords|telescope|microscope|crown|gem|hexagon|pentagon|fingerprint）。非法值由 API 擋下。",
 			},
 			"capabilities": schema.StringAttribute{
-				Optional: true,
+				Optional:    true,
 				Description: "agent 能力描述。live 探測：這是「單一字串」（不是清單）——一段說明文字。",
 			},
 			"reports_to": schema.StringAttribute{
 				Optional: true,
 				Description: "上級 agent 的 id（參照另一個 paperclip_agent.id）。根 agent 留空（null）。" +
-					"Terraform 的依賴圖會自動確保上級先建立。註：把已設定的 reports_to 改回 null（重新" +
-					"變成根 agent）不受支援——pointer+omitempty 無法送出 JSON null；需要時請重建該 agent。",
+					"Terraform 的依賴圖會自動確保上級先建立。把已設定的 reports_to 從 config 移除（改回 null）" +
+					"會送出 JSON null，讓 agent 重新變回根 agent（live 實證 2026-07-22），無須重建。",
 			},
 			"desired_skills": schema.ListAttribute{
 				Optional:    true,
@@ -130,7 +131,7 @@ func (r *agentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 					"engine": schema.StringAttribute{Optional: true},
 					"chrome": schema.BoolAttribute{Optional: true, Description: "是否啟用 chrome 工具。"},
 					"env": schema.MapNestedAttribute{
-						Optional: true,
+						Optional:    true,
 						Description: "環境變數注入，key 是環境變數名，value 參照一個 secret。序列化成 live secret_ref 形狀。",
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
@@ -246,21 +247,27 @@ func (r *agentResource) Update(ctx context.Context, req resource.UpdateRequest, 
 
 	in := buildAgentUpdateInput(plan, state)
 
-	// adapter 有變 → GET 現有 adapterConfig、只疊管理的 key、PATCH replaceAdapterConfig=false。
+	// adapter 有變 → GET 現有 adapterConfig，疊上 plan 管理的 key（保留未管 key），
+	// 並處理「從 config 移除某管理 key」的清除（見 buildAdapterConfigPatch）。
 	if !plan.Adapter.Equal(state.Adapter) {
 		current, err := r.client.GetAgent(ctx, state.ID.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Update agent failed (reading current adapterConfig)", err.Error())
 			return
 		}
-		managed, diags := buildManagedAdapterConfig(ctx, plan.Adapter)
+		planManaged, diags := buildManagedAdapterConfig(ctx, plan.Adapter)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		in.AdapterConfig = client.MergeAdapterConfig(current.AdapterConfig, managed)
-		replaceFalse := false
-		in.ReplaceAdapterConfig = &replaceFalse
+		priorManaged, diags := buildManagedAdapterConfig(ctx, state.Adapter)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		cfg, replace := buildAdapterConfigPatch(current.AdapterConfig, planManaged, priorManaged)
+		in.AdapterConfig = cfg
+		in.ReplaceAdapterConfig = &replace
 	}
 
 	if !agentUpdateInputEmpty(in) {
@@ -395,12 +402,49 @@ func buildAgentUpdateInput(plan, state agentResourceModel) client.AgentUpdateInp
 		v := plan.Capabilities.ValueString()
 		in.Capabilities = &v
 	}
-	// reports_to：只在改成「非 null」時送出（omitempty 無法表達 JSON null → 見 schema 說明）。
-	if !plan.ReportsTo.Equal(state.ReportsTo) && !plan.ReportsTo.IsNull() {
-		v := plan.ReportsTo.ValueString()
-		in.ReportsTo = &v
+	// reports_to 三態（見 client.AgentUpdateInput.ReportsTo 說明）：
+	//   未變 → 不送（保留現況）；改成值 → 送 JSON 字串；由值改回 null → 送 JSON null（回到根）。
+	if !plan.ReportsTo.Equal(state.ReportsTo) {
+		if plan.ReportsTo.IsNull() {
+			in.ReportsTo = json.RawMessage("null")
+		} else {
+			b, _ := json.Marshal(plan.ReportsTo.ValueString())
+			in.ReportsTo = json.RawMessage(b)
+		}
 	}
 	return in
+}
+
+// buildAdapterConfigPatch computes the adapterConfig payload + replaceAdapterConfig
+// flag for an Update where the `adapter` block changed. It answers two needs at once:
+//
+//   - ADD/CHANGE a managed key (model/engine/chrome/env): overlay the plan's managed
+//     keys onto the live bag via MergeAdapterConfig (preserving every unmanaged key)
+//     and PATCH with replaceAdapterConfig=false — the pre-existing, working path.
+//   - CLEAR a managed key (present in PRIOR STATE's adapter, dropped from the plan):
+//     REMOVE it from the computed bag and switch to replaceAdapterConfig=true.
+//
+// Why the split: live probe (2026-07-22) proved a partial merge (replaceAdapterConfig
+// =false) with a `null` value clears SCALAR keys (chrome/engine) but is SILENTLY
+// IGNORED for the object key `env` — the server deep-merges and treats a null RHS as
+// "no change" for object values. A full-config replace (built from the live bag minus
+// the cleared keys) removes ALL managed keys uniformly while preserving the unmanaged
+// ones (paperclipSkillSync, instructions*, unknown keys), and is idempotent.
+//
+// `current` is the freshly-GET'd live bag; it is never mutated (MergeAdapterConfig
+// returns a fresh copy and we only delete from that copy). Only keys the provider
+// manages are ever removed — priorManaged/planManaged come from buildManagedAdapterConfig,
+// which never surfaces a server-owned key.
+func buildAdapterConfigPatch(current, planManaged, priorManaged map[string]any) (map[string]any, bool) {
+	merged := client.MergeAdapterConfig(current, planManaged)
+	replace := false
+	for k := range priorManaged {
+		if _, stillManaged := planManaged[k]; !stillManaged {
+			delete(merged, k)
+			replace = true
+		}
+	}
+	return merged, replace
 }
 
 func agentUpdateInputEmpty(in client.AgentUpdateInput) bool {

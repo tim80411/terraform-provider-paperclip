@@ -1,6 +1,9 @@
 package client
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Agent is the paperclip agent as returned by GET /api/agents/{id}.
 //
@@ -49,15 +52,23 @@ type AgentCreateInput struct {
 // ReplaceAdapterConfig 是 *bool（不是 bool）——因為 false 是我們要「明確送出」的值
 // （告訴 server 做 shallow-merge 而非整包替換），若用 `bool + omitempty`，false 會被
 // omitempty 吃掉、變成「不送」，server 就會退回預設行為。用指標才能區分「沒設」與「設 false」。
+//
+// ReportsTo 是 json.RawMessage（不是 *string）——因為它需要「三態」：
+//   - nil（omitempty 吃掉）→ 不送 → 保留現況
+//   - json.RawMessage("null") → 送出 JSON null → agent 回到根（live 實證 2026-07-22）
+//   - json.RawMessage(`"<uuid>"`) → 送出字串 → 指定上級
+//
+// `*string + omitempty` 只能表達「省略」與「值」兩態，無法送出 JSON null，所以無法把
+// 已設定的上級清成根。改用 RawMessage 才能明確送 null。
 type AgentUpdateInput struct {
-	Name                 *string        `json:"name,omitempty"`
-	Role                 *string        `json:"role,omitempty"`
-	Title                *string        `json:"title,omitempty"`
-	Icon                 *string        `json:"icon,omitempty"`
-	Capabilities         *string        `json:"capabilities,omitempty"`
-	ReportsTo            *string        `json:"reportsTo,omitempty"`
-	AdapterConfig        map[string]any `json:"adapterConfig,omitempty"`
-	ReplaceAdapterConfig *bool          `json:"replaceAdapterConfig,omitempty"`
+	Name                 *string         `json:"name,omitempty"`
+	Role                 *string         `json:"role,omitempty"`
+	Title                *string         `json:"title,omitempty"`
+	Icon                 *string         `json:"icon,omitempty"`
+	Capabilities         *string         `json:"capabilities,omitempty"`
+	ReportsTo            json.RawMessage `json:"reportsTo,omitempty"`
+	AdapterConfig        map[string]any  `json:"adapterConfig,omitempty"`
+	ReplaceAdapterConfig *bool           `json:"replaceAdapterConfig,omitempty"`
 }
 
 // managedAdapterConfigKeys are the ONLY adapterConfig keys this provider owns.

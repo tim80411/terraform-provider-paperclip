@@ -52,6 +52,61 @@ func checkAgentAdapterSurvives(resourceName, wantModel string) resource.TestChec
 	}
 }
 
+// checkAgentAdapterKeysAbsent GETs the agent via the raw API and asserts each of
+// `absentKeys` is GONE from adapterConfig (removed, or at worst null — both mean
+// "cleared" to the provider), WHILE the paperclip-owned keys (paperclipSkillSync +
+// instructions*) and the Required model key are STILL present. This is the make-or-
+// break for the clear-on-removal fix: it proves the computed-full-config replace path
+// removes only the managed keys the user dropped and never the opaque bag paperclip owns.
+func checkAgentAdapterKeysAbsent(resourceName string, absentKeys ...string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("%s not in state", resourceName)
+		}
+		c := client.New(os.Getenv("PAPERCLIP_API_BASE"), os.Getenv("PAPERCLIP_API_KEY"))
+		got, err := c.GetAgent(context.Background(), rs.Primary.ID)
+		if err != nil {
+			return fmt.Errorf("GetAgent(%s): %w", rs.Primary.ID, err)
+		}
+		ac := got.AdapterConfig
+		for _, k := range absentKeys {
+			if v, present := ac[k]; present && v != nil {
+				return fmt.Errorf("adapterConfig[%q] = %v, want CLEARED (absent/null) — non-converging remnant", k, v)
+			}
+		}
+		if _, ok := ac["paperclipSkillSync"].(map[string]any); !ok {
+			return fmt.Errorf("paperclipSkillSync MISSING after clear — the exact regression the fix guards against: %+v", ac)
+		}
+		if _, ok := ac["instructionsEntryFile"]; !ok {
+			return fmt.Errorf("instructions* MISSING after clear: %+v", ac)
+		}
+		if ac["model"] == nil {
+			return fmt.Errorf("model MISSING after clear (Required key): %+v", ac)
+		}
+		return nil
+	}
+}
+
+// checkAgentReportsToNull asserts (raw API) that the agent has been reset to root.
+func checkAgentReportsToNull(resourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("%s not in state", resourceName)
+		}
+		c := client.New(os.Getenv("PAPERCLIP_API_BASE"), os.Getenv("PAPERCLIP_API_KEY"))
+		got, err := c.GetAgent(context.Background(), rs.Primary.ID)
+		if err != nil {
+			return fmt.Errorf("GetAgent(%s): %w", rs.Primary.ID, err)
+		}
+		if got.ReportsTo != "" {
+			return fmt.Errorf("reportsTo = %q, want empty (root) after reset", got.ReportsTo)
+		}
+		return nil
+	}
+}
+
 func TestAccAgentResource_lifecycle(t *testing.T) {
 	ts := time.Now().Unix()
 	companyName := fmt.Sprintf("tfacc-agent-%d", ts)
@@ -59,8 +114,21 @@ func TestAccAgentResource_lifecycle(t *testing.T) {
 	const modelUpdated = "claude-opus-4-8"
 
 	// config renders the whole graph: company → secret → root agent → subordinate agent.
-	// 依賴圖保證建立順序（root 先於 sub，secret 先於 sub.env）。
-	config := func(model string) string {
+	// 依賴圖保證建立順序（root 先於 sub，secret 先於 sub.env）。The three bools toggle the
+	// managed keys under test so successive steps can DROP them and prove convergence.
+	config := func(model string, subChrome, subEnv, subReportsTo bool) string {
+		reportsToLine := ""
+		if subReportsTo {
+			reportsToLine = "  reports_to     = paperclip_agent.root.id\n"
+		}
+		chromeLine := ""
+		if subChrome {
+			chromeLine = "    chrome = true\n"
+		}
+		envBlock := ""
+		if subEnv {
+			envBlock = "    env = {\n      GH_TOKEN = { secret_id = paperclip_company_secret.gh.id }\n    }\n"
+		}
 		return fmt.Sprintf(`
 resource "paperclip_company" "c" {
   name = %q
@@ -91,17 +159,12 @@ resource "paperclip_agent" "sub" {
   title          = "Data Engineer"
   icon           = "database"
   capabilities   = "does data things"
-  reports_to     = paperclip_agent.root.id
-  desired_skills = [%q]
+%s  desired_skills = [%q]
   adapter = {
     model  = %q
-    chrome = true
-    env = {
-      GH_TOKEN = { secret_id = paperclip_company_secret.gh.id }
-    }
-  }
+%s%s  }
 }
-`, companyName, model, boardSkill, model)
+`, companyName, model, reportsToLine, boardSkill, model, chromeLine, envBlock)
 	}
 
 	resource.Test(t, resource.TestCase{
@@ -125,7 +188,7 @@ resource "paperclip_agent" "sub" {
 		},
 		Steps: []resource.TestStep{
 			{ // create: chain + skills attached at create (so paperclipSkillSync exists)
-				Config: config(modelInitial),
+				Config: config(modelInitial, true, true, true),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet("paperclip_agent.root", "id"),
 					resource.TestCheckNoResourceAttr("paperclip_agent.root", "reports_to"),
@@ -138,11 +201,35 @@ resource "paperclip_agent" "sub" {
 					checkAgentAdapterSurvives("paperclip_agent.sub", modelInitial),
 				),
 			},
-			{ // update adapter.model → THE make-or-break: paperclipSkillSync + instructions* must survive
-				Config: config(modelUpdated),
+			{ // update adapter.model → working merge path: paperclipSkillSync + instructions* must survive
+				Config: config(modelUpdated, true, true, true),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("paperclip_agent.sub", "adapter.model", modelUpdated),
 					checkAgentAdapterSurvives("paperclip_agent.sub", modelUpdated),
+				),
+			},
+			{ // CLEAR chrome (scalar): drop it from adapter. The built-in post-apply idempotency
+				// check FAILS if the plan doesn't converge — the direct proof of the clear fix.
+				Config: config(modelUpdated, false, true, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("paperclip_agent.sub", "adapter.chrome"),
+					// env survives (still declared); chrome gone; unmanaged bag intact.
+					resource.TestCheckResourceAttrPair("paperclip_agent.sub", "adapter.env.GH_TOKEN.secret_id", "paperclip_company_secret.gh", "id"),
+					checkAgentAdapterKeysAbsent("paperclip_agent.sub", "chrome"),
+				),
+			},
+			{ // CLEAR env (object): drop it. Proves the object-key case null-under-merge could NOT clear.
+				Config: config(modelUpdated, false, false, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("paperclip_agent.sub", "adapter.env.GH_TOKEN.secret_id"),
+					checkAgentAdapterKeysAbsent("paperclip_agent.sub", "chrome", "env"),
+				),
+			},
+			{ // RESET reports_to: drop it → subordinate returns to root (explicit JSON null).
+				Config: config(modelUpdated, false, false, false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("paperclip_agent.sub", "reports_to"),
+					checkAgentReportsToNull("paperclip_agent.sub"),
 				),
 			},
 			{ // import subordinate by plain id (passthrough)

@@ -194,6 +194,72 @@ func TestUpdateAgent_OmitsUnsetFieldsSendsAdapterConfig(t *testing.T) {
 	}
 }
 
+func TestUpdateAgent_SendsReportsToNullWhenCleared(t *testing.T) {
+	// reports_to reset → root：body 必須含 "reportsTo": null（不是省略、也不是空字串）。
+	// live 探測（2026-07-22）：PATCH {"reportsTo":null} 讓 agent 回到根。
+	var raw map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &raw)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"a1","companyId":"co1","name":"Sub","reportsTo":null}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	if _, err := c.UpdateAgent(context.Background(), "a1", AgentUpdateInput{ReportsTo: json.RawMessage("null")}); err != nil {
+		t.Fatalf("UpdateAgent: %v", err)
+	}
+	v, ok := raw["reportsTo"]
+	if !ok {
+		t.Fatal("body must CONTAIN reportsTo when clearing (explicit null)")
+	}
+	if string(v) != "null" {
+		t.Errorf("reportsTo = %s, want null", string(v))
+	}
+}
+
+func TestUpdateAgent_SendsReportsToValueWhenSet(t *testing.T) {
+	var raw map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &raw)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"a1","companyId":"co1","name":"Sub","reportsTo":"boss-2"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	rt, _ := json.Marshal("boss-2")
+	if _, err := c.UpdateAgent(context.Background(), "a1", AgentUpdateInput{ReportsTo: json.RawMessage(rt)}); err != nil {
+		t.Fatalf("UpdateAgent: %v", err)
+	}
+	if string(raw["reportsTo"]) != `"boss-2"` {
+		t.Errorf("reportsTo = %s, want \"boss-2\"", string(raw["reportsTo"]))
+	}
+}
+
+func TestUpdateAgent_OmitsReportsToWhenNil(t *testing.T) {
+	// 沒動到 reports_to → nil RawMessage → 不得出現在 body（保留現況，不誤送 null）。
+	var raw map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &raw)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"a1","companyId":"co1","name":"Renamed"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	name := "Renamed"
+	if _, err := c.UpdateAgent(context.Background(), "a1", AgentUpdateInput{Name: &name}); err != nil {
+		t.Fatalf("UpdateAgent: %v", err)
+	}
+	if _, ok := raw["reportsTo"]; ok {
+		t.Errorf("body must NOT contain reportsTo when nil: %+v", raw)
+	}
+}
+
 func TestDeleteAgent(t *testing.T) {
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -268,13 +334,13 @@ func TestMergeAdapterConfig_PreservesUnmanagedKeys(t *testing.T) {
 		"paperclipSkillSync": map[string]any{
 			"desiredSkills": []any{"paperclipai/paperclip/paperclip-board"},
 		},
-		"instructionsFilePath":   "/x/AGENTS.md",
-		"instructionsRootPath":   "/x",
-		"instructionsEntryFile":  "AGENTS.md",
-		"instructionsBundleMode": "managed",
-		"graceSec":               15,
+		"instructionsFilePath":       "/x/AGENTS.md",
+		"instructionsRootPath":       "/x",
+		"instructionsEntryFile":      "AGENTS.md",
+		"instructionsBundleMode":     "managed",
+		"graceSec":                   15,
 		"dangerouslySkipPermissions": true,
-		"someUnknownFutureKey":   "keepme",
+		"someUnknownFutureKey":       "keepme",
 	}
 	managed := map[string]any{"model": "claude-opus-4-8"}
 
