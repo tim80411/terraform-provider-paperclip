@@ -3,6 +3,7 @@ package provider
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"testing"
 	"time"
@@ -10,7 +11,16 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
-// scratch company → routine + schedule trigger，驗證建立、冪等、暫停（TFPC-5 情境 1/2）。
+func testAccModel() string {
+	if m := os.Getenv("PAPERCLIP_TEST_MODEL"); m != "" {
+		return m
+	}
+	return "claude-sonnet-4-6" // 與 agent acceptance 同款既存慣例值
+}
+
+// scratch company + agent → routine（assignee, active）+ schedule trigger，
+// 驗證建立、冪等、暫停（TFPC-5 情境 1/2）。
+// live 規則：active 需要 assignee（無 assignee 會被靜默降級 paused）。
 func TestAccRoutineResource_lifecycle(t *testing.T) {
 	name := fmt.Sprintf("tfacc-scratch-rt-%d", time.Now().Unix()) // 唯一名，絕不撞既有正式公司
 
@@ -18,10 +28,21 @@ func TestAccRoutineResource_lifecycle(t *testing.T) {
 		return fmt.Sprintf(`
 resource "paperclip_company" "s" { name = %q }
 
-resource "paperclip_routine" "r" {
+resource "paperclip_agent" "a" {
   company_id = paperclip_company.s.id
-  title      = "%s-routine"
-  status     = %q
+  name       = "Routine Runner"
+  role       = "ceo"
+  icon       = "crown"
+  adapter = {
+    model = %q
+  }
+}
+
+resource "paperclip_routine" "r" {
+  company_id        = paperclip_company.s.id
+  title             = "%s-routine"
+  status            = %q
+  assignee_agent_id = paperclip_agent.a.id
 }
 
 resource "paperclip_routine_trigger" "t" {
@@ -29,7 +50,7 @@ resource "paperclip_routine_trigger" "t" {
   cron_expression = "0 9 * * 1-5"
   timezone        = "Asia/Taipei"
 }
-`, name, name, status)
+`, name, testAccModel(), name, status)
 	}
 
 	resource.Test(t, resource.TestCase{
@@ -51,6 +72,30 @@ resource "paperclip_routine_trigger" "t" {
 			{ // 更新 status → paused
 				Config: config("paused"),
 				Check:  resource.TestCheckResourceAttr("paperclip_routine.r", "status", "paused"),
+			},
+		},
+	})
+}
+
+// 無 assignee 宣告 active → plan 期就被 ValidateConfig 擋下（不打 API）。
+func TestAccRoutine_activeWithoutAssigneeRejected(t *testing.T) {
+	name := fmt.Sprintf("tfacc-scratch-rtna-%d", time.Now().Unix())
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoV6Factories(),
+		PreCheck:                 func() { preCheck(t) },
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "paperclip_company" "s" { name = %q }
+
+resource "paperclip_routine" "r" {
+  company_id = paperclip_company.s.id
+  title      = "%s-routine"
+  status     = "active"
+}
+`, name, name),
+				ExpectError: regexp.MustCompile("assignee_agent_id"),
 			},
 		},
 	})

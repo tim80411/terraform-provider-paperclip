@@ -40,12 +40,15 @@ type RoutineTriggerUpdateInput struct {
 }
 
 func (c *Client) CreateRoutineTrigger(ctx context.Context, routineID string, in RoutineTriggerCreateInput) (*RoutineTrigger, error) {
-	var out RoutineTrigger
+	// live 實證：POST 回 {trigger, revision} 信封（PATCH 才回裸 trigger）。
+	var out struct {
+		Trigger RoutineTrigger `json:"trigger"`
+	}
 	body := routineTriggerCreateBody{Kind: "schedule", RoutineTriggerCreateInput: in}
 	if err := c.do(ctx, "POST", "/api/routines/"+routineID+"/triggers", body, &out); err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return &out.Trigger, nil
 }
 
 func (c *Client) UpdateRoutineTrigger(ctx context.Context, triggerID string, in RoutineTriggerUpdateInput) (*RoutineTrigger, error) {

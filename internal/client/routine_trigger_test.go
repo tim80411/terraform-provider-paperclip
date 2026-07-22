@@ -18,8 +18,9 @@ func TestCreateRoutineTrigger_PostsScheduleKind(t *testing.T) {
 		gotPath = r.URL.Path
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &gotBody)
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"id":"tg1","kind":"schedule","cronExpression":"0 9 * * *","timezone":"Asia/Taipei","enabled":true}`))
+		w.WriteHeader(201)
+		// live 實證：POST 回 {trigger, revision} 信封（PATCH 才回裸 trigger）
+		_, _ = w.Write([]byte(`{"trigger":{"id":"tg1","kind":"schedule","cronExpression":"0 9 * * *","timezone":"Asia/Taipei","enabled":true},"revision":{"id":"rev1"}}`))
 	}))
 	defer srv.Close()
 

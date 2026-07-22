@@ -19,7 +19,7 @@ resource "paperclip_company" "s" { name = %q }
 
 resource "paperclip_secret_provider_config" "v" {
   company_id   = paperclip_company.s.id
-  provider     = "local_encrypted"
+  provider_type = "local_encrypted"
   display_name = %q
 }
 `, name, display)

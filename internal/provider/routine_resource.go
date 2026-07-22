@@ -67,6 +67,23 @@ func (r *routineResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	}
 }
 
+// live 規則（normalizeDraftRoutineStatus 實證）：無 assignee 的 routine 宣告
+// status=active 會被 server 靜默降級為 paused → apply 產生 inconsistent-result。
+// 在 plan 期就把這條規則變成明確錯誤。
+func (r *routineResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg routineResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if cfg.Status.ValueString() == "active" && cfg.AssigneeAgentID.IsNull() {
+		resp.Diagnostics.AddError(
+			"active routine requires assignee_agent_id",
+			"The API silently downgrades an unassigned active routine to paused. Set assignee_agent_id, or declare status = \"paused\".",
+		)
+	}
+}
+
 func (r *routineResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return

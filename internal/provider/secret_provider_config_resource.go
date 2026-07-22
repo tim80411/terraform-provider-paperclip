@@ -31,13 +31,13 @@ type secretProviderConfigResource struct {
 func NewSecretProviderConfigResource() resource.Resource { return &secretProviderConfigResource{} }
 
 type secretProviderConfigResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	CompanyID   types.String `tfsdk:"company_id"`
-	Provider    types.String `tfsdk:"provider"`
-	DisplayName types.String `tfsdk:"display_name"`
-	Status      types.String `tfsdk:"status"`
-	IsDefault   types.Bool   `tfsdk:"is_default"`
-	ConfigJSON  types.String `tfsdk:"config_json"`
+	ID           types.String `tfsdk:"id"`
+	CompanyID    types.String `tfsdk:"company_id"`
+	ProviderType types.String `tfsdk:"provider_type"`
+	DisplayName  types.String `tfsdk:"display_name"`
+	Status       types.String `tfsdk:"status"`
+	IsDefault    types.Bool   `tfsdk:"is_default"`
+	ConfigJSON   types.String `tfsdk:"config_json"`
 }
 
 func (r *secretProviderConfigResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -53,7 +53,7 @@ func (r *secretProviderConfigResource) Schema(_ context.Context, _ resource.Sche
 				Required:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
-			"provider": schema.StringAttribute{
+			"provider_type": schema.StringAttribute{
 				Required:      true,
 				Description:   "local_encrypted | aws_secrets_manager | gcp_secret_manager | vault (gcp/vault are locked coming_soon server-side).",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
@@ -124,13 +124,13 @@ func spcToModel(companyID string, got *client.SecretProviderConfig, priorConfigJ
 		cfgStr = priorConfigJSON.ValueString()
 	}
 	return secretProviderConfigResourceModel{
-		ID:          types.StringValue(got.ID),
-		CompanyID:   types.StringValue(companyID),
-		Provider:    types.StringValue(got.Provider),
-		DisplayName: types.StringValue(got.DisplayName),
-		Status:      types.StringValue(got.Status),
-		IsDefault:   types.BoolValue(got.IsDefault),
-		ConfigJSON:  types.StringValue(cfgStr),
+		ID:           types.StringValue(got.ID),
+		CompanyID:    types.StringValue(companyID),
+		ProviderType: types.StringValue(got.Provider),
+		DisplayName:  types.StringValue(got.DisplayName),
+		Status:       types.StringValue(got.Status),
+		IsDefault:    types.BoolValue(got.IsDefault),
+		ConfigJSON:   types.StringValue(cfgStr),
 	}
 }
 
@@ -141,7 +141,7 @@ func (r *secretProviderConfigResource) Create(ctx context.Context, req resource.
 		return
 	}
 	in := client.SecretProviderConfigCreateInput{
-		Provider:    plan.Provider.ValueString(),
+		Provider:    plan.ProviderType.ValueString(),
 		DisplayName: plan.DisplayName.ValueString(),
 	}
 	if !plan.Status.IsNull() && !plan.Status.IsUnknown() {
