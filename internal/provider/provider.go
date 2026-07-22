@@ -80,6 +80,7 @@ func (p *paperclipProvider) Resources(_ context.Context) []func() resource.Resou
 		NewProjectResource,
 		NewProjectWorkspaceResource,
 		NewRoutineResource,
+		NewRoutineTriggerResource,
 	}
 }
 

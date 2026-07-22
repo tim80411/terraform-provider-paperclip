@@ -23,6 +23,9 @@ type Routine struct {
 	Description     string `json:"description,omitempty"`
 	Status          string `json:"status,omitempty"`
 	AssigneeAgentId string `json:"assigneeAgentId,omitempty"`
+	// Triggers 只在 GET /api/routines/{id}（detail）出現；trigger resource 的
+	// Read 靠它做 list-then-find（trigger 無單獨 GET 端點）。
+	Triggers []RoutineTrigger `json:"triggers,omitempty"`
 }
 
 type RoutineCreateInput struct {
