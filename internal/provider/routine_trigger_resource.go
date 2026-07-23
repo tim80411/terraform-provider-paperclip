@@ -12,7 +12,9 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
@@ -198,4 +200,19 @@ func (r *routineTriggerResource) Delete(ctx context.Context, req resource.Delete
 	if err := r.client.DeleteRoutineTrigger(ctx, state.ID.ValueString()); err != nil && !client.IsGone(err) {
 		resp.Diagnostics.AddError("Delete routine trigger failed", err.Error())
 	}
+}
+
+// ImportState: trigger 無單獨 GET（Read 走 parent routine 的 triggers envelope），
+// 所以 import ID 必須是 "routine_id/trigger_id" 複合鍵（同 secret 的 company_id/secret_id 手法）。
+func (r *routineTriggerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	parts := strings.SplitN(req.ID, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		resp.Diagnostics.AddError(
+			"Unexpected Import Identifier",
+			fmt.Sprintf(`Expected import ID in the form "routine_id/trigger_id", got: %q`, req.ID),
+		)
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("routine_id"), parts[0])...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
 }

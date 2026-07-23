@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -182,7 +183,13 @@ func (r *routineResource) Read(ctx context.Context, req resource.ReadRequest, re
 		resp.State.RemoveResource(ctx)
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, routineToModel(state.CompanyID.ValueString(), got))...)
+	// company_id 以 API 回應為準（GET detail 帶 companyId）——import 走
+	// passthrough 只有 id，company_id 靠這裡回填；一般 Read 兩者本就一致。
+	companyID := state.CompanyID.ValueString()
+	if got.CompanyID != "" {
+		companyID = got.CompanyID
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, routineToModel(companyID, got))...)
 }
 
 func (r *routineResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -209,4 +216,10 @@ func (r *routineResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if err := r.client.ArchiveRoutine(ctx, state.ID.ValueString()); err != nil && !client.IsGone(err) {
 		resp.Diagnostics.AddError("Archive routine failed", err.Error())
 	}
+}
+
+// ImportState: routine uuid 直通 id；company_id 由 Read 從 GET detail 的
+// companyId 回填（見 Read 註解）。
+func (r *routineResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
