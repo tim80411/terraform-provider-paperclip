@@ -36,6 +36,11 @@ resource "paperclip_company_budget" "b" {
 				Config:   config(50000),
 				PlanOnly: true,
 			},
+			{ // import：singleton per company → import ID 就是 company_id（= 資源 id）
+				ResourceName:      "paperclip_company_budget.b",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
 			{ // 調整上限
 				Config: config(120000),
 				Check:  resource.TestCheckResourceAttr("paperclip_company_budget.b", "monthly_cents", "120000"),

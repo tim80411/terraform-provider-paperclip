@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -134,4 +135,12 @@ func (r *companyBudgetResource) Delete(ctx context.Context, req resource.DeleteR
 	if _, err := r.apply(ctx, state.CompanyID.ValueString(), 0); err != nil && !client.IsGone(err) {
 		resp.Diagnostics.AddError("Reset company budget failed", err.Error())
 	}
+}
+
+// ImportState: singleton per company（resource id = company_id）→ import ID
+// 就是 company_id，同時回填 id 與 company_id；monthly_cents 由 Read 從
+// GET company 的 budgetMonthlyCents 回填。
+func (r *companyBudgetResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), req.ID)...)
 }

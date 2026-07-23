@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 func testAccModel() string {
@@ -68,6 +69,23 @@ resource "paperclip_routine_trigger" "t" {
 			{ // 再 apply 為 no-op（冪等）
 				Config:   config("active"),
 				PlanOnly: true,
+			},
+			{ // import routine：純 uuid 直通，company_id 由 Read 從 GET detail 回填
+				ResourceName:      "paperclip_routine.r",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{ // import trigger：無單獨 GET → 複合 "routine_id/trigger_id"
+				ResourceName:      "paperclip_routine_trigger.t",
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs, ok := s.RootModule().Resources["paperclip_routine_trigger.t"]
+					if !ok {
+						return "", fmt.Errorf("paperclip_routine_trigger.t not found in state")
+					}
+					return rs.Primary.Attributes["routine_id"] + "/" + rs.Primary.ID, nil
+				},
 			},
 			{ // 更新 status → paused
 				Config: config("paused"),
